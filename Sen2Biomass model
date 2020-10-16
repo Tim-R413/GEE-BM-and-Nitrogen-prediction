@@ -1,0 +1,127 @@
+{
+var sentII = ee.ImageCollection('COPERNICUS/S2')
+                  .filterDate('2018-01-01', '2018-06-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
+                  
+  
+
+function cloud_mask(image){
+                    var qa = image.select('QA60');
+                    var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+                  }
+
+var sentII = sentII.map(cloud_mask);
+
+var RGB = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2']
+};
+}
+
+
+
+//#############################DATASET PROCESSING#########################################
+//dataset
+var dataset = table;
+var bands_2 = ['B2','B3','B4','B5','B6','B7','B8','B8A','B9', 'B11','B12'];
+var bands = ['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9', 'B10','B11','B12'];
+//split into training and validation
+
+// The randomColumn() method will add a column of uniform random
+// numbers in a column named 'random' by default.
+dataset = dataset.randomColumn();
+
+var split = 0.85;  // Roughly 80% training, 20% testing.
+var training = dataset.filter(ee.Filter.lt('random', split));
+var validation = dataset.filter(ee.Filter.gte('random', split));
+
+print('number of training elements: ',training.size())
+print('the number of val elements:', validation.size())
+
+
+//##############################BUILDING RF MODEL#######################################
+//Classifier:
+var biomass_model = ee.Classifier.smileRandomForest(
+  {numberOfTrees: 415,
+  variablesPerSplit: 5
+  }).setOutputMode("REGRESSION")
+  
+print(" this is a ", biomass_model.mode(), " model")
+
+
+//########################### MODEL TRAINING RESULTS #############################
+//model Training
+var trained = biomass_model.train(
+  {features: training,
+  classProperty: 'classification' ,
+  inputProperties: bands_2})
+var classified = training.select(bands).classify(trained)
+print(classified)
+
+//Assess accuracy
+  // Get model training results 
+print("Model training results are:",trained.explain())
+
+//######################## MODEL VALIDATION RESULTS##################################
+
+
+
+var imp_dict = trained.explain();
+var variable_importance = ee.Feature(null, ee.Dictionary(imp_dict).get('importance'));
+ 
+var chart =
+ui.Chart.feature.byProperty(variable_importance)
+.setChartType('ColumnChart')
+.setOptions({
+title: 'Random Forest Variable Importance',
+legend: {position: 'none'},
+hAxis: {title: 'Bands'},
+vAxis: {title: 'Importance'}
+});
+ 
+print(chart);
+
+  //classify validation data and review accuracy 
+var val_result = validation.select(bands).classify(trained)
+//print('the validation predictions are:', val_result)
+//print("validation accuracy is:", val_result.errorMatrix('biomass_m2','classification').accuracy() )
+print();
+
+
+//Display on map 
+ Map.addLayer(classified, {min: 0.0, max: 0.3, palette: ['blue','red']},'classified image');
+Map.addLayer(dataset, {min: 0.0, max: 0.3, palette: ['blue','red']},
+'unclassified image');
+Map.centerObject(dataset)
+
+
+// extract the values for the classification property and for the biomass property 
+var i =0;
+var n=0;
+//print(val_result.toList(val_result.size()).getArray(1))
+var values1 = ee.Array(val_result.aggregate_array('classification'))
+var values2 = ee.Array(validation.aggregate_array('classification'))
+var constant1 = ee.Array(ee.List.repeat(0.00000000000001,66))
+var constant2 = ee.Array(ee.List.repeat(100,66))
+var percent_error = (values2.subtract(values1).abs().divide(values2.add(constant1))).multiply(constant2)
+
+var actual = values2
+var predicted = values1
+
+
+print(actual.subtract(predicted).pow(2).reduce('mean', [0]).sqrt(),'RMSE')
+
+print(" numbers are",values1)
+print(" the original numbers are", values2);
+print()
+
+print('the average error in validation was:', percent_error);
