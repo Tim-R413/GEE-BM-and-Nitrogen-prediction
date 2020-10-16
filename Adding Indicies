@@ -1,0 +1,18 @@
+var origin = table;
+
+
+//add AVI ARVI Clgreen EVI and EVI2
+
+
+
+var AVI = origin.map(function(feat){
+  var B09= ee.Feature(feat).getNumber('B09')
+  var B04 = ee.Feature(feat).getNumber('B04')
+  var num = 2.0 * (B09 - B04)
+  
+  return num
+})
+
+
+print(origin)
+print(AVI)
