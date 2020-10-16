@@ -1,0 +1,193 @@
+/*
+Map.addLayer(strip1);
+Map.addLayer(strip2);
+Map.addLayer(strip3);
+Map.addLayer(strip4);
+Map.addLayer(strip5);
+Map.addLayer(strip6);
+Map.addLayer(strip7);
+Map.addLayer(strip8);
+Map.addLayer(strip9);
+Map.addLayer(strip10);
+Map.addLayer(strip11);
+Map.addLayer(strip12);
+*/
+Map.centerObject(strip1)
+
+//Map.addLayer(field_data)
+//Map.addLayer(KVfeatures)
+//Map.centerObject(KVfeatures)
+
+var s1 = strip1.clip(geometry)
+//Map.addLayer(s1)
+var s2 = strip2.clip(geometry2)
+//Map.addLayer(s2)
+
+var s3 = strip3.clip(geometry3)
+var s4 = strip4.clip(geometry4)
+var s5 = strip5.clip(geometry5)
+var s6 = strip6.clip(geometry6)
+var s7 = strip7.clip(geometry7)
+var s8 = strip8.clip(geometry8)
+var s9 = strip9.clip(geometry9)
+var s10 = strip10.clip(geometry10)
+var s11 = strip11.clip(geometry11)
+var s12 = strip12.clip(geometry12)
+//var mosaic_geom = ee.Geometry.MultiPolygon(( geometry2.coordinates() , geometry3.coordinates() , geometry4.coordinates(), geometry5.coordinates(), geometry6.coordinates(), geometry7.coordinates(), geometry8.coordinates(), geometry9.coordinates(), geometry10.coordinates(), geometry11.coordinates(), geometry12.coordinates()))
+var mosaic_geom = ee.Algorithms.GeometryConstructors.MultiPolygon([geometry, geometry2 , geometry3 , geometry4, geometry5, geometry6, geometry7, geometry8, geometry9, geometry10,geometry11, geometry12])
+
+//print (mosaic_geom)
+Map.addLayer(mosaic_geom, {}, 'mosaic geometry');
+
+
+
+var KV_mosaic = ee.ImageCollection([s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12]).mosaic();
+Map.addLayer(KV_mosaic, {}, 'mosaic');
+print('KV_mosaic', KV_mosaic);
+
+
+Map.addLayer(table,{},'field level data')
+Map.centerObject(table)
+
+// Reduce the region. The region parameter is the Feature geometry.
+
+var bands = ['b1','b2','b3','b4','b5','b6','b7','b8','b9', 'b10',
+            'b11','b12', 'b13','b14','b15','b16','b17','b18','b19',
+            'b21','b22', 'b23','b24','b25','b26','b27','b28','b29','b30',
+            'b31','b32', 'b33','b34','b35','b36','b37','b38','b39','b40',
+            'b41','b42', 'b43','b44','b45','b46','b47','b48','b49','b50',
+            'b51','b52', 'b53','b54','b55','b56','b57','b58'];
+print('band names', bands)
+var coords = ee.Image.pixelLonLat()
+var bands2 = (ee.List(bands).insert(57,'longitude')).insert(58,'latitude');
+
+
+var KV_full = KV_mosaic.select(bands).addBands(coords)
+print('KV with locations', KV_full)
+
+var meanDict = KV_mosaic.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: mosaic_geom,
+  scale: 0.019339081369306246,
+  maxPixels: 1e9
+});
+
+var KV_coll = KV_full.reduceRegion({
+  reducer: ee.Reducer.toCollection(bands2),
+ 
+  
+  geometry: mosaic_geom,
+  
+  scale: 5,
+  
+  maxPixels: 1e9,
+  
+}).values().get(0);
+ 
+
+// The result is a Feature Collection
+print('KV1', KV_coll);
+var KV_collection = ee.FeatureCollection(KV_coll).map(function(feat){
+  
+  feat = ee.Feature(feat)
+  var lat = feat.getNumber('latitude')
+  var lon = feat.getNumber('longitude')
+ // var combine = ee.List(lat,lon)
+  
+  var coor = ee.Geometry.Point(lon,lat )
+  
+  var new_feat = feat.setGeometry(coor )
+  return new_feat
+  
+  
+   
+})
+
+print('NEW KV1', KV_collection);
+
+
+//**********************Hyperspec RF model******************//
+
+var table_train = table.filter(ee.Filter.neq('StripLocat', 'Strip5'));
+print('table_train', table_train);
+
+
+
+// ****** Random Forest Regression ******
+// ***************************************
+
+// ********* Train RF *********
+
+// Regression model
+var biomass_RF_hp = ee.Classifier.smileRandomForest(
+  {numberOfTrees: 415,
+  variablesPerSplit: 18
+  }).setOutputMode("REGRESSION");
+ 
+// Training set
+var training_RF_hp = table_train;
+
+// Training model
+var trained_RF_hp = biomass_RF_hp.train(
+  {features: training_RF_hp,
+  classProperty: 'totalBioma' ,
+  inputProperties: bands});
+
+
+// Feature importance
+var imp_dict = trained_RF_hp.explain();
+print(imp_dict)
+var variable_importance = ee.Feature(null, ee.Dictionary(imp_dict).get('importance'));
+ 
+var chart =
+ui.Chart.feature.byProperty(variable_importance)
+.setChartType('ColumnChart')
+.setOptions({
+title: 'Random Forest Variable Importance',
+legend: {position: 'none'},
+hAxis: {title: 'Bands'},
+vAxis: {title: 'Importance'}
+});
+ 
+print(chart);
+// **********************validation***********
+
+var dataset = ee.FeatureCollection(KV_collection).randomColumn();
+
+var split = 0.95;  // Roughly 80% training, 20% testing.
+var validation = dataset.filter(ee.Filter.gte('random', split));
+Map.addLayer(validation, {},'validation set')
+print( validation) 
+
+var val_result = validation.select(bands).classify(trained_RF_hp);
+print(val_result)
+
+
+var hyperspec_est_bio = dataset.select(bands).classify(trained_RF_hp);
+
+
+
+var estimations = ee.FeatureCollection(KV_collection).map(function(feat1){
+  
+  feat1 = ee.Feature(feat1)
+  
+  var classes = hyperspec_est_bio.map(function(feat2){
+    feat2 = ee.Feature(feat2)
+    
+    var classif = feat2.getNumber('classification')
+    
+    feat1.set('biomass',classif)
+    return ee.Feature(feat2.get('classififcation'))
+    
+    
+  })
+  return ee.Feature(feat1)
+})
+
+print ('exporting this collection', estimations)
+
+var harv = estimations.geometry();
+//Map.centerObject(harv);
+Map.addLayer(harv, {color:'red'}, "estimations ");
+
+Export.table.toAsset(hyperspec_est_bio,'Exporting biomass dataset', "Hyp_estim_bio")
