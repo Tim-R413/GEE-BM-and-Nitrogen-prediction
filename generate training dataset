@@ -1,0 +1,126 @@
+//Satellite images and feature imports:
+{
+
+var dataset = ee.ImageCollection('COPERNICUS/S2')
+                  .filterDate('2018-01-01', '2018-06-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
+{
+function cloud_mask(image){
+                    var qa = image.select('QA60');
+                    var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+                  }
+
+var dataset = dataset.map(cloud_mask);
+
+var RGB = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2']
+};
+
+Map.addLayer(dataset.median(),RGB, "Sent II");
+
+}
+var data = table;
+}
+
+// create centroid location from features and add as new property
+{
+var addCenter = function(feat){
+  var geocent = feat.centroid().geometry();
+  
+  var centerProp = feat.set({location: geocent});
+  return centerProp;
+};
+
+var data2 = data.map(addCenter)
+
+print('this is the orginal feature collection')
+print(data)
+//print("the added centroid example is below:")
+//print(synth2.toList(4));
+
+Map.addLayer(data2.geometry(), {color: 'red'},'colored');
+Map.setCenter(-75.99249341711973,39.307373619426045, 18);
+}
+
+// create new feature collection from centroid location, and estimation data info
+// un comment the below sections based on wheter the input data is biomass estimations or nitrogen 
+{
+var propList = ee.List(['classification','totalN']);
+var biomass_collection = data2.map(function(feat){
+  feat = ee.Feature(feat);
+  var loc = feat.centroid().geometry();
+  return ee.Feature(loc, feat.toDictionary(ee.List([propList.get(0)])));
+  });
+/*
+var nitrogen_collection = data2.map(function(feat){
+  feat = ee.Feature(feat);
+  var loc = feat.centroid().geometry();
+  return ee.Feature(loc, feat.toDictionary( 'classification') ) ;
+  });
+*/
+
+//print('this is the new collections with new geometries')
+print ("collection before Sen2 Bands",biomass_collection);
+//print(nitrogen_collection)
+}
+
+// Extract band values from SenII images based on centroid locations
+// Add band values to the new feature collection as properties
+{
+  // this function extracts the band values from the feature argument based on its provide geometry coordinat 
+  // the band values are obtained from a pixel scaled 10 meters up from the Lat, Lon coordinate.
+var extractBand = function(feat){
+  var bands = ['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9', 'B10','B11','B12'];
+  var num_elements = bands.length;
+  var img = ee.Image(dataset.median().clip(feat));
+  img = img.select(bands);
+  
+  var valuesList = img.reduceRegion({
+    reducer:ee.Reducer.toList(num_elements),
+    geometry:feat.geometry(),
+    scale: 10,
+  }).values().get(0);
+  
+  var el = ee.List(ee.List(valuesList).get(0));
+  var addedBands = feat.set({
+      B1 : ee.Number(el.get(0)),
+      B2 : ee.Number(el.get(1)),
+      B3: ee.Number(el.get(2)),
+      B4: ee.Number(el.get(3)),
+      B5: ee.Number(el.get(4)),
+      B6: ee.Number(el.get(5)),
+      B7: ee.Number(el.get(6)),
+      B8: ee.Number(el.get(7)),
+      B8A: ee.Number(el.get(8)),
+      B9: ee.Number(el.get(9)),
+      B10: ee.Number(el.get(10)),
+      B11: ee.Number(el.get(11)),
+      B12: ee.Number(el.get(12))
+    })
+    return addedBands;
+}
+
+
+}
+
+
+// final training feature datasets 
+var biomassData = biomass_collection.map(extractBand);
+//var nitrogenData = nitrogen_collection.map(extractBand);
+//print(nitrogenData);
+print('collection after Sen2 Bands', biomassData);
+
+
+// saving datasets 
+Export.table.toAsset(biomassData,'Exporting biomass dataset', "Biomass_train")
+//Export.table.toAsset(nitrogenData,'Exporting nitrogen dataset', "Nitrogen_dataKV19")
